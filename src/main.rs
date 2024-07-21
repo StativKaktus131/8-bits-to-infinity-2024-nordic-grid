@@ -11,9 +11,14 @@ use ggez::{
 	mint::Point2,
 	input::keyboard::{KeyCode, KeyMods, KeyInput},
 	input::mouse::{MouseContext, MouseButton},
-	Context, ContextBuilder, GameResult
+	Context, ContextBuilder, GameResult, GameError
 };
 use std::f32::consts::PI as PI;
+
+extern crate sdl2;
+use sdl2::mouse::Cursor;
+use sdl2::surface::Surface;
+use sdl2::pixels::PixelFormatEnum;
 
 // module declarations
 pub mod global_constants;
@@ -21,12 +26,16 @@ pub mod grid_drawer;
 pub mod player;
 pub mod card;
 pub mod math;
+pub mod level_manager;
+pub mod explainer;
 
 // module imports
 use global_constants as GlobConst;
 use grid_drawer as GridDrawer;
+use level_manager as LevelManager;
 use player::*;
 use card::*;
+use explainer::*;
 
 
 const TWO_PI: f32 = 2.0 * PI;
@@ -36,20 +45,25 @@ const TWO_PI: f32 = 2.0 * PI;
 // GAME STATE STRUCT
 struct Game {
 	quad_mesh: Mesh,		// temporary
-	tile_image: Image,		// make a struct in grid drawer?
 	player: Player,
 	cards: Vec<Card>,
+	explainer: Explainer,
+	tile_images: Vec<Image>,	// make a struct in grid drawer?
 }
 
 impl Game {
 	pub fn new(ctx: &mut Context) -> Game {
-		let cards = vec!(Card::new(ctx, CardType::Move), Card::new(ctx, CardType::Move), Card::new(ctx, CardType::Armor), Card::new(ctx, CardType::Health), Card::new(ctx, CardType::Health));
 		let player = Player::new(ctx, 0, 0);
 		Game {
 			quad_mesh: Mesh::new_rectangle(ctx, DrawMode::fill(), Rect::new(0.0, 0.0, GlobConst::QUAD_SIZE, GlobConst::QUAD_SIZE), Color::WHITE).unwrap(),
-			tile_image: Image::from_path(ctx, "/tile.png").unwrap(),
 			player: player,
-			cards: cards,
+			cards: Vec::<Card>::new(),
+			explainer: Explainer::new(ctx),
+			tile_images: vec!(
+				Image::from_path(ctx, "/tile.png").unwrap(),
+				Image::from_path(ctx, "/tree.png").unwrap(),
+				Image::from_path(ctx, "/chest.png").unwrap()
+			),
 		}
 	}
 }
@@ -108,27 +122,17 @@ impl EventHandler for Game {
 		let (screen_w, screen_h) = ctx.gfx.size();
 		
 		// draw grid with (temporary) quad mesh
-		GridDrawer::draw_grid(ctx, &mut canvas, &self.tile_image)?;
+		GridDrawer::draw_grid(ctx, &mut canvas, &self.tile_images)?;
 
 		// draw player
 		self.player.draw(ctx, &mut canvas, &self.quad_mesh)?;
-
-		/*
-		let dp = DrawParam::default()
-			.dest_rect(Rect::new(
-				screen_w * 0.5 - 75.0 * GlobConst::SCALE,
-				screen_h - 50.0 * GlobConst::SCALE,
-				1.0 / 50.0 * 150.0 * GlobConst::SCALE,
-				1.0 / 50.0 * 50.0 * GlobConst::SCALE
-			));
-
-		canvas.draw(&self.quad_mesh, dp);
-		*/
 
 		// draw cards
 		for card in &mut self.cards {
 			card.draw(ctx, &mut canvas)?;
 		}
+
+		self.explainer.draw(ctx, &mut canvas)?;
 
 		// present
 		canvas.finish(ctx)?;
@@ -159,6 +163,9 @@ impl Game {
 			&CardType::Armor => {
 				self.player.change_at(ValueType::Armor, 1.0)?;
 			},
+			&CardType::Key => {
+				self.player.use_key();
+			},
 		}
 
 		self.cards.remove(idx);
@@ -188,7 +195,17 @@ fn main() {
 		.build()
 		.expect("Couldn't create ggez context.");
 
-	let game = Game::new(&mut ctx);
+	let mut game = Game::new(&mut ctx);
+
+	let lvl = LevelManager::load_level(&mut ctx, "resources/levels/level1.json", &mut game.cards, &mut game.player, &mut game.explainer).unwrap();
+
+	// println!("{:#?}", lvl);
+
+	// let mut binding = Image::from_path(&mut ctx, "/glove_big.png").unwrap().to_pixels(&ctx).unwrap();
+	// let glove = Surface::from_data(&mut binding, 16, 16, 0, PixelFormatEnum::RGBA32).unwrap();
+	// let cursor = Cursor::from_surface(&glove, 8, 2).unwrap();
+
+	// cursor.set();
 
 	event::run(ctx, event_loop, game);
 }

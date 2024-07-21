@@ -15,6 +15,8 @@ use std::f32::consts::PI as PI;
 
 
 const NEIGHBORS: [(i32, i32); 12] = [(0, -2), (-1, -1), (0, -1), (1, -1), (-2, 0), (-1, 0), (1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)];
+const KEY_NEIGHBORS: [(i32, i32); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+const TRAVEL_SPEED: f32 = 10.0;
 
 const COLORS: [[u8; 3]; 3] = [
 	[75, 202, 50],
@@ -99,7 +101,8 @@ impl WalkRune {
 				GridDrawer::TILE_SIZE / self.sprite.height() as f32 * GlobConst::SCALE
 			))
 			.offset(vec2(0.5, 0.5))
-			.rotation(self.rot * PI / 180.0);
+			.rotation(self.rot * PI / 180.0)
+			.z(1000);
 
 		canvas.draw(&self.sprite, dp);
 
@@ -120,13 +123,15 @@ pub enum ValueType {
 
 pub struct Player {
 	pub pos: Vec2,		// position in the grid
+	pub target_pos: Vec2,
 	screen_pos: Vec2,	// position on screen
-	size: Vec2,		// temporary: later sprite/image size
+	sprite: Image,
 	rune_positions: Vec<(i32, i32)>,
 	rune_sprite: Image,
 
 	walk_rune: WalkRune,
 	moving: bool,
+	using_key: bool,
 
 	bars: [Image; 3],
 	icons: Image,
@@ -151,23 +156,25 @@ impl Player {
 			}
 		}
 
-		let bar = Image::from_path(ctx, "/bar_gray.png").unwrap();
+		let img = Image::from_path(ctx, "/glove_big.png").unwrap();
 
-		let red_bar = Image::from_pixels(ctx, &other_bars[1], bar.format(), 5, 1);
-		let green_bar = Image::from_pixels(ctx, &other_bars[0], bar.format(), 5, 1);
-		let blue_bar = Image::from_pixels(ctx, &other_bars[2], bar.format(), 5, 1);
+		let red_bar = Image::from_pixels(ctx, &other_bars[1], img.format(), 5, 1);
+		let green_bar = Image::from_pixels(ctx, &other_bars[0], img.format(), 5, 1);
+		let blue_bar = Image::from_pixels(ctx, &other_bars[2], img.format(), 5, 1);
 
 		let icons = Image::from_path(ctx, "/icons.png").unwrap();
 
 		Player {
 			pos: vec2(x as f32, y as f32),
+			target_pos: Vec2::ZERO,
 			screen_pos: vec2(0.0, 0.0),
-			size: vec2(20.0, 30.0),
+			sprite: Image::from_path(ctx, "/player.png").unwrap(),
 			rune_positions: vec!(),
 			rune_sprite: Image::from_path(ctx, "/rune.png").unwrap(),
 
 			walk_rune: WalkRune::new(ctx),
 			moving: false,
+			using_key: false,
 
 			bars: [red_bar, blue_bar, green_bar],
 			icons: icons,
@@ -182,16 +189,30 @@ impl Player {
 		// convert grid position to screen position
 		GridDrawer::grid_pos_to_screen(ctx, &self.pos, &mut self.screen_pos)?;
 		
-		// pivot at the feet
-		self.screen_pos -= vec2(self.size.x * 0.5, self.size.y) * GlobConst::SCALE;
+		self.pos = self.pos.lerp(self.target_pos, TRAVEL_SPEED * *dt);
+		
+		if self.pos.distance(self.target_pos) <= 0.05 {
+			self.pos = self.target_pos;
+		}
 
-		if self.moving {
+		// pivot at the feet
+		self.screen_pos -= vec2(self.sprite.width() as f32 * 0.5, self.sprite.height() as f32 * 0.75) * GlobConst::SCALE;
+
+		if self.moving || self.using_key {
 			self.walk_rune.update(ctx, dt)?;
 			
 			if ctx.mouse.button_just_pressed(MouseButton::Left) && self.walk_rune.on_possible_position(&self.rune_positions) {
-				self.pos = self.walk_rune.grid_pos;
-				self.moving = false;
-				self.rune_positions.clear();
+				if self.moving {
+					self.target_pos = self.walk_rune.grid_pos;
+					self.moving = false;
+					self.rune_positions.clear();
+				}
+
+				else if self.using_key {
+					println!("OPEN_CHEST");
+					self.using_key = false;
+					self.rune_positions.clear();
+				}
 			}
 		}
 
@@ -210,26 +231,24 @@ impl Player {
 					screen_pos.y - GridDrawer::TILE_SIZE as f32 * 0.5 * GlobConst::SCALE,
 					GridDrawer::TILE_SIZE as f32 / self.rune_sprite.width() as f32 * GlobConst::SCALE,
 					GridDrawer::TILE_SIZE as f32 / self.rune_sprite.height() as f32 * GlobConst::SCALE
-				));
+				))
+				.z(1000);
 
 			canvas.draw(&self.rune_sprite, dp);
 		}
 
 		// draw rune
-		if self.moving {
+		if self.moving || self.using_key {
 			self.walk_rune.draw(ctx, canvas)?;
 		}
 
 		// maybe save player rect in the struct?
 		let draw_param = DrawParam::default()
-			.dest_rect(Rect::new(
-				self.screen_pos.x,
-				self.screen_pos.y,
-				self.size.x / GlobConst::QUAD_SIZE * GlobConst::SCALE,
-				self.size.y / GlobConst::QUAD_SIZE * GlobConst::SCALE
-			));
+			.dest(vec2(self.screen_pos.x, self.screen_pos.y))
+			.scale(GlobConst::SCALE_VECTOR)
+			.z(self.screen_pos.y as i32);
 
-		canvas.draw(quad_mesh, draw_param);
+		canvas.draw(&self.sprite, draw_param);
 		
 		self.draw_icons(ctx, canvas)?;
 
@@ -317,8 +336,37 @@ impl Player {
 				continue;
 			}
 
+			if neighbor.0 * neighbor.0 == 4 || neighbor.1 * neighbor.1 == 4 {
+				println!("{}, {}", neighbor.0, neighbor.1);
+				let (mx, my) = (neighbor.0 / 2 + self.pos.x as i32, neighbor.1 / 2 + self.pos.y as i32);
+				if GridDrawer::get_state(mx as usize, my as usize) != GridDrawer::State::Empty {
+					continue;
+				}
+			}
+
+			if GridDrawer::get_state(x as usize, y as usize) != GridDrawer::State::Empty {
+				continue;
+			}
+
 			self.rune_positions.push((x, y));
 		}
 		self.moving = true;
+	}
+
+	pub fn use_key(self: &mut Player) {
+		for neighbor in KEY_NEIGHBORS {
+			let (x, y) = (neighbor.0 + self.pos.x as i32, neighbor.1 + self.pos.y as i32);
+
+			if x < 0 || x >= GridDrawer::TILES_PER_ROW as i32 || y < 0 || y >= GridDrawer::TILES_PER_ROW as i32 {
+				continue;
+			}
+
+			if GridDrawer::get_state(x as usize, y as usize) != GridDrawer::State::Chest {
+				continue;
+			}
+
+			self.rune_positions.push((x, y));
+		}
+		self.using_key = true;
 	}
 }

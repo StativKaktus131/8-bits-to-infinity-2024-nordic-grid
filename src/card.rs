@@ -26,7 +26,8 @@ const CARD_HEIGHT: u32 = 45;
 pub enum CardType {
 	Move = 0,
 	Armor = 1,
-	Health = 2
+	Health = 2,
+	Key = 3
 }
 
 
